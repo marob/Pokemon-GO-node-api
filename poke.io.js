@@ -47,7 +47,7 @@ geocoder.reverseGeocode = function (lat, lng, callback) {
         console.log('Using cache for geocoder.reverseGeocodeCache', position);
         callback(null, geocoder.reverseGeocodeCache[position]);
     }
-    geocoder.reverseGeocodeNoCache(name, function(err, data) {
+    geocoder.reverseGeocodeNoCache(lat, lng, function(err, data) {
         if (!err) {
             console.log('Storing geocoder.reverseGeocodeCache result in cache', position);
             geocoder.reverseGeocodeCache = geocoder.reverseGeocodeCache || [];
