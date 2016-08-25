@@ -29,15 +29,16 @@ geocoder.geocode = function (name, callback) {
     if (geocoder.geocodeCache && geocoder.geocodeCache[name]) {
         console.log('Using cache for geocoder.geocode', name);
         callback(null, geocoder.geocodeCache[name]);
+    } else {
+        geocoder.geocodeNoCache(name, function(err, data) {
+            if (!err) {
+                console.log('Storing geocoder.geocode result in cache', name);
+                geocoder.geocodeCache = geocoder.geocodeCache || [];
+                geocoder.geocodeCache[name] = data;
+            }
+            callback(err, data);
+        });
     }
-    geocoder.geocodeNoCache(name, function(err, data) {
-        if (!err) {
-            console.log('Storing geocoder.geocode result in cache', name);
-            geocoder.geocodeCache = geocoder.geocodeCache || [];
-            geocoder.geocodeCache[name] = data;
-        }
-        callback(err, data);
-    });
 };
 
 geocoder.reverseGeocodeNoCache = geocoder.reverseGeocode;
@@ -46,15 +47,16 @@ geocoder.reverseGeocode = function (lat, lng, callback) {
     if (geocoder.reverseGeocodeCache && geocoder.reverseGeocodeCache[position]) {
         console.log('Using cache for geocoder.reverseGeocodeCache', position);
         callback(null, geocoder.reverseGeocodeCache[position]);
+    } else {
+        geocoder.reverseGeocodeNoCache(lat, lng, function(err, data) {
+            if (!err) {
+                console.log('Storing geocoder.reverseGeocodeCache result in cache', position);
+                geocoder.reverseGeocodeCache = geocoder.reverseGeocodeCache || [];
+                geocoder.reverseGeocodeCache[position] = data;
+            }
+            callback(err, data);
+        });
     }
-    geocoder.reverseGeocodeNoCache(lat, lng, function(err, data) {
-        if (!err) {
-            console.log('Storing geocoder.reverseGeocodeCache result in cache', position);
-            geocoder.reverseGeocodeCache = geocoder.reverseGeocodeCache || [];
-            geocoder.reverseGeocodeCache[position] = data;
-        }
-        callback(err, data);
-    });
 };
 
 var builder = ProtoBuf.loadProtoFile('pokemon.proto');
