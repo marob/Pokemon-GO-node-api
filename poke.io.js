@@ -19,10 +19,20 @@ var ProtoBuf = require('protobufjs');
 var GoogleOAuth = require('gpsoauthnode');
 var fs = require('fs');
 var S2 = require('s2-geometry').S2;
+var long = require('long');
 
 var Logins = require('./logins');
 
-var pogoSignature = require('node-pogo-signature');
+var pogoSignature = require('node-pogo-signature').Builder;
+
+function GetRequestID() {
+    var bytes = crypto.randomBytes(8);
+    return long.fromBits(
+        bytes[0] << 24 | bytes[1] << 16 | bytes[2] << 8 | bytes[3],
+        bytes[4] << 24 | bytes[5] << 16 | bytes[6] << 8 | bytes[7],
+        true
+    );
+}
 
 geocoder.geocodeNoCache = geocoder.geocode;
 geocoder.geocode = function (name, callback) {
@@ -103,6 +113,7 @@ function getNeighbors(lat, lng) {
 
 function Pokeio() {
   var self = this;
+  self.builder = new pogoSignature();
   self.events = new EventEmitter();
   self.j = request.jar();
   self.request = request.defaults({
@@ -133,142 +144,97 @@ function Pokeio() {
     }
   };
 
-  function api_req(api_endpoint, access_token, req, callback) {
-    // Auth
-    var authInfo = new RequestEnvelop.AuthInfo({
-      provider: self.playerInfo.provider,
-      token: new RequestEnvelop.AuthInfo.JWT(access_token, 59)
-    });
-
-
-    //console.log(req);
-
-    var f_req = new RequestEnvelop({
-      unknown1: 2,
-      rpc_id: 1469378659230941192,
-
-      requests: req,
-
-      latitude: self.playerInfo.latitude,
-      longitude: self.playerInfo.longitude,
-      altitude: self.playerInfo.altitude,
-
-      unknown12: 989
-    });
-
-    if (self.playerInfo.authTicket) {
-      f_req.auth_ticket = self.playerInfo.authTicket;
-
-      var lat = self.playerInfo.latitude, lng = self.playerInfo.longitude, alt = self.playerInfo.altitude;
-      var authTicketEncoded = self.playerInfo.authTicket.encode().toBuffer();
-
-      var signature = new Signature({
-        location_hash1: pogoSignature.utils.hashLocation1(authTicketEncoded, lat, lng, alt).toNumber(),
-        location_hash2: pogoSignature.utils.hashLocation2(lat, lng, alt).toNumber(),
-        unk22: crypto.randomBytes(32),
-        timestamp: new Date().getTime(),
-        timestamp_since_start: (new Date().getTime() - self.playerInfo.initTime),
-      });
-
-      if (!Array.isArray(req)) {
-        req = [req];
-      }
-
-      req.forEach(function(request) {
-        var reqHash = pogoSignature.utils.hashRequest(authTicketEncoded, request.encode().toBuffer()).toString();
-        var hash = require('long').fromString(reqHash, true, 10);
-        signature.request_hash.push(hash);
-      });
-
-      // Simulate real device
-      // add  condition
-      if( self.playerInfo.device_info !== null ) {
-          signature.device_info = new Signature.DeviceInfo({
-            device_id: self.playerInfo.device_info.device_id,
-            android_board_name: self.playerInfo.device_info.android_board_name,
-            android_bootloader: self.playerInfo.device_info.android_bootloader,
-            device_brand: self.playerInfo.device_info.device_brand,
-            device_model: self.playerInfo.device_info.device_model,
-            device_model_identifier: self.playerInfo.device_info.device_model_identifier,
-            device_model_boot: self.playerInfo.device_info.device_model_boot,
-            hardware_manufacturer: self.playerInfo.device_info.hardware_manufacturer,
-            hardware_model: self.playerInfo.device_info.hardware_model,
-            firmware_brand: self.playerInfo.device_info.firmware_brand,
-            firmware_tags: self.playerInfo.device_info.firmware_tags,
-            firmware_type: self.playerInfo.device_info.firmware_type,
-            firmware_fingerprint: self.playerInfo.device_info.firmware_fingerprint
-          });
-     }
-
-      signature.location_fix = new Signature.LocationFix({
-        provider: "network",
-        timestamp_since_start: (new Date().getTime() - self.playerInfo.initTime),
-        provider_status: 3,
-        location_type: 1
-      });
-
-      var iv = crypto.randomBytes(32);
-
-      pogoSignature.encrypt(signature.encode().toBuffer(), iv, function(err, signatureEnc) {
-        f_req.unknown6 = new RequestEnvelop.Unknown6({
-          unknown1: 6,
-          unknown2: new RequestEnvelop.Unknown6.Unknown2({
-            unknown1: signatureEnc
-          })
+    function api_req(api_endpoint, access_token, req, callback) {
+        // Auth
+        var authInfo = new RequestEnvelop.AuthInfo({
+            provider: self.playerInfo.provider,
+            token: new RequestEnvelop.AuthInfo.JWT(access_token, 59)
         });
-        compiledProtobuf(f_req);
-      });
 
-    } else {
-      f_req.auth = authInfo;
-      compiledProtobuf(f_req);
+        var f_req = new RequestEnvelop({
+            unknown1: 2,
+            rpc_id: GetRequestID(),
+            ms_since_last_locationfix: 989, ///100 + Math.floor(Math.random() * 900), /// 989
+
+            requests: req,
+
+            latitude: self.playerInfo.latitude,
+            longitude: self.playerInfo.longitude,
+            altitude: self.playerInfo.altitude
+        });
+
+        if (self.playerInfo.authTicket) {
+            f_req.auth_ticket = self.playerInfo.authTicket;
+
+            let lat = self.playerInfo.latitude, lng = self.playerInfo.longitude, alt = self.playerInfo.altitude;
+            let authTicketEncoded = self.playerInfo.authTicket.encode().toBuffer();
+
+            self.builder.setLocation(lat, lng, alt);
+            self.builder.setAuthTicket(authTicketEncoded, true);
+
+            self.builder.encrypt(req, (err, signatureEnc) => {
+                f_req.unknown6 = new RequestEnvelop.Unknown6({
+                unknown1: 6,
+                unknown2: new RequestEnvelop.Unknown6.Unknown2({
+                    unknown1: signatureEnc
+                })
+            });
+
+            compiledProtobuf(f_req);
+        })
+        }
+        else {
+            f_req.auth = authInfo;
+            compiledProtobuf(f_req);
+        }
+
+        function compiledProtobuf(protobuf) {
+            protobuf = f_req.encode().toBuffer();
+
+            var options = {
+                url: api_endpoint,
+                body: protobuf,
+                encoding: null,
+                headers: {
+                    'User-Agent': 'Niantic App',
+                    'Accept': '*/*',
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            };
+            self.request.post(options, function (err, response, body) {
+                if (err) {
+                    return callback(new Error('Error'));
+                } /*else if (!err && response && response.statusCode === 403) {
+                 return callback(new Error("Banned"));
+                 }*/
+
+                if (response === undefined || body === undefined) {
+                    console.error('[!] RPC Server offline');
+                    return callback(new Error('RPC Server offline'));
+                }
+
+                var f_ret;
+                try {
+                    f_ret = ResponseEnvelop.decode(body);
+                } catch (e) {
+                    if (e.decoded) {
+                        // Truncated
+                        console.warn(e);
+                        f_ret = e.decoded; // Decoded message with missing required fields
+                    }
+                }
+
+                if (f_ret) {
+                    if (f_ret.auth_ticket) {
+                        self.playerInfo.authTicket = f_ret.auth_ticket;
+                    }
+                    return callback(null, f_ret);
+                } else {
+                    api_req(api_endpoint, access_token, req, callback);
+                }
+            });
+        }
     }
-
-    function compiledProtobuf(protobuf) {
-      //console.log(JSON.stringify(protobuf))
-      protobuf = f_req.encode().toBuffer();
-
-      var options = {
-        url: api_endpoint,
-        body: protobuf,
-        encoding: null,
-        headers: {
-          'User-Agent': 'Niantic App'
-        }
-      };
-
-      self.request.post(options, function (err, response, body) {
-        if (err) {
-          return callback(new Error('Error'));
-        }
-
-        if (response === undefined || body === undefined) {
-          console.error('[!] RPC Server offline');
-          return callback(new Error('RPC Server offline'));
-        }
-
-        var f_ret;
-        try {
-          f_ret = ResponseEnvelop.decode(body);
-        } catch (e) {
-          if (e.decoded) {
-            // Truncated
-            console.warn(e);
-            f_ret = e.decoded; // Decoded message with missing required fields
-          }
-        }
-
-        if (f_ret) {
-          if (f_ret.auth_ticket) {
-            self.playerInfo.authTicket = f_ret.auth_ticket;
-          }
-          return callback(null, f_ret);
-        } else {
-          api_req(api_endpoint, access_token, req, callback);
-        }
-      });
-    }
-  }
 
   self.init = function (username, password, location, provider, callback) {
     if (provider !== 'ptc' && provider !== 'google') {
